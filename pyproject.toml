@@ -1,0 +1,15 @@
+[project]
+name = "gdsiistl"
+version = "0.1.0"
+description = "Convert GDSII layers into 3D STL meshes"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "gdspy",
+    "numpy",
+    "numpy-stl",
+    "triangle",
+]
+
+[tool.uv]
+package = false
