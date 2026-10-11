@@ -25,33 +25,38 @@ The `.python-version` file selects Python 3.12. uv can download it if it is not 
 Run the included example from the repository directory:
 
 ```sh
-uv run --locked gdsiistl.py example/example.gds
+uv run --locked gdsiistl.py convert example/example.gds example/layerstack.json
 ```
 
-It creates `example/example.gds_substrate.stl`, `example/example.gds_soi.stl`, and `example/example.gds_metal.stl`.
+This creates `example/example.gds_substrate.stl`, `example/example.gds_soi.stl`, and `example/example.gds_metal.stl` using the names and heights in the JSON file.
 
 # Usage
 
-To convert your own GDSII file, edit the `layerstack` dictionary near the top of `gdsiistl.py` to match its layers. The included example uses:
+First, create a layerstack draft from your GDSII file:
 
-```python
-layerstack = {
-    # GDSII layer number: (bottom z, top z, output name)
-    1: (0, 550, 'substrate'),
-    3: (552, 592, 'soi'),
-    6: (592, 593, 'metal'),
+```sh
+uv run --locked gdsiistl.py draft-layers path/to/file.gds
+```
+
+This writes `path/to/file.gds.layerstack.json` and stops without producing STL files. The draft lists every layer/datatype pair that contains polygon geometry. It keeps an existing draft intact instead of overwriting it. Open the JSON in a text editor and change `name` if you want meaningful output names. The default `zmin` and `zmax` put layers in numeric order, one GDS user unit thick. They work for an illustrative 3D view without editing. GDSII does **not** contain physical layer order or thickness, so edit the z values only when you need physical dimensions.
+
+Then convert, passing both files explicitly:
+
+```sh
+uv run --locked gdsiistl.py convert path/to/file.gds path/to/file.gds.layerstack.json
+```
+
+The included [example/layerstack.json](example/layerstack.json) contains:
+
+```json
+{
+  "1/0": {"zmin": 0, "zmax": 550, "name": "substrate"},
+  "3/0": {"zmin": 552, "zmax": 592, "name": "soi"},
+  "6/0": {"zmin": 592, "zmax": 593, "name": "metal"}
 }
 ```
 
-Replace the layer numbers with those in your GDSII file, set each layer's bottom and top heights in the file's user units, and choose names for the output files. Only layers listed in `layerstack` are exported.
-
-Then run the script from the repository directory, replacing the path with your GDSII file:
-
-```sh
-uv run --locked gdsiistl.py path/to/file.gds
-```
-
-For a layer named `substrate`, the output is written next to the input file as `path/to/file.gds_substrate.stl`. [Blender](https://www.blender.org/) can import the STL files for viewing and rendering.
+Each key is `layer/datatype` from the GDS, not a label or data type. Keep the key unchanged unless you intend to select a different existing GDS pair; an unknown pair is rejected. Heights use the GDS user unit. Only listed pairs are exported. [Blender](https://www.blender.org/) can import the STL files for viewing and rendering.
 
 ## Note
 

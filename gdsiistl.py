@@ -4,12 +4,12 @@ This program converts a GDSII 2D layout file to multiple 3D STL files that can
 be visualized in an external program (e.g., Blender).
 
 USAGE:
-    - edit the "layerstack" variable in the "CONFIGURATION" section below
-    - run "gdsiistl file.gds"
+    - run "gdsiistl draft-layers file.gds" to create an editable JSON draft
+    - run "gdsiistl convert file.gds stack.json" to export STL files
 OUTPUT:
     - the files file.gds_layername1.stl, file.gds_layername2.stl, ...
 
-The program takes one argument, a path to a GDSII file. It reads shapes from
+The program takes a path to a GDSII file. It reads shapes from
 each layer of the GDSII file, converts them to polygon boundaries, then makes
 a triangle mesh for each GDSII layer by extruding the polygons to given sizes.
 
@@ -17,27 +17,24 @@ All units, including the units of the exported file, are the GDSII file's
 user units (often microns).
 """
 
-import sys # read command-line arguments
+import argparse
+import json
+import math
+from pathlib import Path
 import gdspy # open gds file
 from stl import mesh # write stl file (python package name is "numpy-stl")
 import numpy as np # fast math on lots of points
 import triangle # triangulate polygons
 
-# get the input file name
-if len(sys.argv) < 2: # sys.argv[0] is the name of the program
-    print("Error: need exactly one file as a command line argument.")
-    sys.exit(0)
-gdsii_file_path = sys.argv[1]
-
-########## CONFIGURATION (EDIT THIS PART) #####################################
-
-# choose which GDSII layers to use
-layerstack = {
-    # layernumber: (zmin, zmax, 'layername'),
-    1: (0, 550, 'substrate'),
-    3: (552, 592, 'soi'),
-    6: (592, 593, 'metal'),
-}
+parser = argparse.ArgumentParser(description='Convert GDSII layers into STL meshes')
+commands = parser.add_subparsers(dest='command', required=True)
+draft_parser = commands.add_parser('draft-layers', help='write an editable layerstack JSON from a GDSII file')
+draft_parser.add_argument('gds', help='input GDSII file')
+convert_parser = commands.add_parser('convert', help='convert selected GDSII layers to STL files')
+convert_parser.add_argument('gds', help='input GDSII file')
+convert_parser.add_argument('layerstack', help='JSON file with z ranges and output names')
+args = parser.parse_args()
+gdsii_file_path = args.gds
 
 ########## INPUT ##############################################################
 
@@ -52,7 +49,7 @@ gdsii = gdspy.GdsLibrary()
 gdsii.read_gds(gdsii_file_path, units='import')
 
 print('Extracting polygons...')
-layers = {} # array to hold all geometry, sorted into layers
+layers = {} # geometry keyed by (GDSII layer, datatype)
 
 cells = gdsii.top_level() # get all cells that aren't referenced by another
 for cell in cells: # loop through cells to read paths and polygons
@@ -64,36 +61,83 @@ for cell in cells: # loop through cells to read paths and polygons
     if cell.name == '$$$CONTEXT_INFO$$$':
         continue # skip this cell
 
-    # combine will all referenced cells (instances, SREFs, AREFs, etc.)
-    cell = cell.flatten()
+    # Include paths and referenced cells while retaining layer and datatype.
+    for spec, polygons in cell.get_polygons(by_spec=True).items():
+        layers.setdefault(tuple(map(int, spec)), []).extend(
+            (poly, None, False) for poly in polygons
+        )
 
-    # loop through paths in cell
-    for path in cell.paths:
-        lnum = path.layers[0] # GDSII layer number
-        # create empty array to hold layer polygons if it doesn't yet exist
-        layers[lnum] = [] if not lnum in layers else layers[lnum]
-        # add paths (converted to polygons) that layer
-        for poly in path.get_polygons():
-            layers[lnum].append((poly, None, False))
+if not layers:
+    parser.error('no polygon geometry found in the GDSII file')
 
-    # loop through polygons (and boxes) in cell
-    for polygon in cell.polygons:
-        lnum = polygon.layers[0] # same as before...
-        layers[lnum] = [] if not lnum in layers else layers[lnum]
-        for poly in polygon.polygons:
-            layers[lnum].append((poly, None, False))
+if args.command == 'draft-layers':
+    draft_path = Path(gdsii_file_path + '.layerstack.json')
+    generated = {
+        f'{layer}/{datatype}': {
+            'zmin': index,
+            'zmax': index + 1,
+            'name': f'layer_{layer}_datatype_{datatype}',
+        }
+        for index, (layer, datatype) in enumerate(sorted(layers))
+    }
+    try:
+        with draft_path.open('x', encoding='utf-8') as stack_file:
+            json.dump(generated, stack_file, indent=2)
+            stack_file.write('\n')
+    except FileExistsError:
+        parser.error(f'{draft_path} already exists; edit it or move it before drafting again')
+    print(f'Created {draft_path}. Edit names if needed; z ranges are illustrative 1-unit steps.')
+    print('For physical heights, edit zmin and zmax before converting.')
+    print('Then run:')
+    print(f'    gdsiistl convert {gdsii_file_path} {draft_path}')
+    raise SystemExit(0)
+
+stack_path = Path(args.layerstack)
+print(f'Using layerstack {stack_path}...')
+with stack_path.open(encoding='utf-8') as stack_file:
+    configured = json.load(stack_file)
+if not isinstance(configured, dict):
+    parser.error('layerstack must be a JSON object keyed by "layer/datatype"')
+if not configured:
+    parser.error('layerstack must contain at least one layer/datatype entry')
+layerstack = {}
+output_names = set()
+for key, entry in configured.items():
+    try:
+        layer, datatype = (int(part) for part in key.split('/'))
+        zmin = float(entry['zmin'])
+        zmax = float(entry['zmax'])
+        name = entry['name']
+    except (ValueError, TypeError, KeyError, AttributeError):
+        parser.error(f'invalid layerstack entry {key!r}')
+    if not (math.isfinite(zmin) and math.isfinite(zmax) and zmin < zmax):
+        parser.error(f'invalid z range for {key!r}')
+    if not isinstance(name, str) or not name or '/' in name or '\\' in name:
+        parser.error(f'invalid output name for {key!r}')
+    if name in output_names:
+        parser.error(f'duplicate output name {name!r}')
+    if (layer, datatype) not in layers:
+        parser.error(f'layerstack entry {key!r} has no geometry in the GDSII file')
+    if (layer, datatype) in layerstack:
+        parser.error(f'duplicate layer/datatype entry {key!r}')
+    layerstack[(layer, datatype)] = (zmin, zmax, name)
+    output_names.add(name)
+
+print('Layerstack:')
+for spec, (zmin, zmax, name) in layerstack.items():
+    print(f'    {spec[0]}/{spec[1]}: {zmin:g}..{zmax:g} ({name})')
 
 """
 At this point, "layers" is a Python dictionary structured as follows:
 
 layers = {
-   0 : [ ([[x1, y1], [x2, y2], ...], None, False), ... ]
-   1 : [ ... ]
-   2 : [ ... ]
+   (0, 0) : [ ([[x1, y1], [x2, y2], ...], None, False), ... ]
+   (1, 0) : [ ... ]
+   (2, 0) : [ ... ]
    ...
 }
 
-Each dictionary key is a GDSII layer number (0-255), and the value of the
+Each dictionary key is a GDSII (layer, datatype) pair, and the value of the
 dictionary at that key (if it exists; keys were only created for layers with
 geometry) is a list of polygons in that GDSII layer. Each polygon is a 3-tuple
 whose first element is a list of points (2-element lists with x and y
@@ -115,7 +159,8 @@ print('Triangulating polygons...')
 num_triangles = {} # will store the number of triangles for each layer
 
 # loop through all layers
-for layer_number, polygons in layers.items():
+for layer_number in sorted(layers):
+    polygons = layers[layer_number]
 
     # but skip layer if it won't be exported
     if not layer_number in layerstack.keys():
@@ -204,15 +249,15 @@ for layer_number, polygons in layers.items():
 At this point, "layers" is as follows:
 
 layers = {
-   0 : [ ([[x1, y1], [x2, y2], ...],
+   (0, 0) : [ ([[x1, y1], [x2, y2], ...],
           {'vertices': [[x1, y1], ...], 'triangles': [[0, 1, 2], ...], ...},
           clockwise), ... ]
-   1 : [ ... ]
-   2 : [ ... ]
+   (1, 0) : [ ... ]
+   (2, 0) : [ ... ]
    ...
 }
 
-Each dictionary key is a GDSII layer number (0-255), and the value of the
+Each dictionary key is a GDSII (layer, datatype) pair, and the value of the
 dictionary at that key (if it exists; keys were only created for layers with
 geometry) is a list of polygons in that GDSII layer. Each polygon has 3 parts:
 First, a list of vertices, as before. Second, a dictionary with triangulation
@@ -234,7 +279,7 @@ defined clockwise (so that the STL triangles are oriented correctly).
 print('Extruding polygons and writing to files...')
 
 # loop through all layers
-for layer in layers:
+for layer in sorted(layers):
 
     # but skip layer if it won't be exported
     if not layer in layerstack.keys():
@@ -287,7 +332,7 @@ for layer in layers:
 
     # save layer to STL file
     filename = gdsii_file_path + '_{}.stl'.format(layername)
-    print('    ({}, {}) to {}'.format(layer, layername, filename))
+    print('    ({}/{}, {}) to {}'.format(*layer, layername, filename))
     layer_mesh_object = mesh.Mesh(layer_mesh_data, remove_empty_areas=False)
     layer_mesh_object.save(filename)
 

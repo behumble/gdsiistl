@@ -25,33 +25,38 @@ uv sync --locked
 저장소 디렉터리에서 포함된 예제 파일을 실행합니다.
 
 ```sh
-uv run --locked gdsiistl.py example/example.gds
+uv run --locked gdsiistl.py convert example/example.gds example/layerstack.json
 ```
 
-실행하면 `example/example.gds_substrate.stl`, `example/example.gds_soi.stl`, `example/example.gds_metal.stl`이 생성됩니다.
+JSON의 이름과 높이를 적용하여 `example/example.gds_substrate.stl`, `example/example.gds_soi.stl`, `example/example.gds_metal.stl`을 생성합니다.
 
 # 사용법
 
-직접 준비한 GDSII 파일을 변환하려면 `gdsiistl.py` 상단의 `layerstack` 딕셔너리를 해당 파일의 레이어에 맞게 수정합니다. 포함된 예제의 설정은 다음과 같습니다.
+먼저 GDSII 파일에서 편집용 layerstack 초안을 생성합니다.
 
-```python
-layerstack = {
-    # GDSII 레이어 번호: (아래쪽 z, 위쪽 z, 출력 이름)
-    1: (0, 550, 'substrate'),
-    3: (552, 592, 'soi'),
-    6: (592, 593, 'metal'),
+```sh
+uv run --locked gdsiistl.py draft-layers path/to/file.gds
+```
+
+`path/to/file.gds.layerstack.json`이 생성되고 STL은 만들지 않습니다. 도형이 있는 모든 레이어/datatype 쌍을 감지하며, 기존 초안은 덮어쓰지 않습니다. 텍스트 편집기로 JSON을 열어 원하는 출력 이름으로 `name`을 바꾸세요. 기본 `zmin`과 `zmax`는 번호순으로 각 레이어를 GDS 사용자 단위 1만큼 쌓으므로 단순한 3D 시각화에는 수정할 필요가 없습니다. GDSII에는 실제 공정 순서와 두께가 없으므로 물리적 치수가 필요할 때만 z 값을 수정합니다.
+
+그다음 GDS와 JSON을 모두 지정하여 변환합니다.
+
+```sh
+uv run --locked gdsiistl.py convert path/to/file.gds path/to/file.gds.layerstack.json
+```
+
+포함된 [example/layerstack.json](example/layerstack.json)은 다음과 같습니다.
+
+```json
+{
+  "1/0": {"zmin": 0, "zmax": 550, "name": "substrate"},
+  "3/0": {"zmin": 552, "zmax": 592, "name": "soi"},
+  "6/0": {"zmin": 592, "zmax": 593, "name": "metal"}
 }
 ```
 
-레이어 번호를 입력 GDSII 파일에 맞게 바꾸고, 각 레이어의 아래쪽과 위쪽 높이를 파일의 사용자 단위로 지정한 뒤 출력 파일에 사용할 이름을 정하세요. `layerstack`에 적힌 레이어만 내보냅니다.
-
-그다음 저장소 디렉터리에서 아래 명령을 실행합니다. 경로는 실제 GDSII 파일 경로로 바꾸세요.
-
-```sh
-uv run --locked gdsiistl.py path/to/file.gds
-```
-
-`substrate`라는 이름의 레이어는 입력 파일과 같은 디렉터리에 `path/to/file.gds_substrate.stl`로 저장됩니다. 출력된 STL 파일은 [Blender](https://www.blender.org/) 등에서 열어 보고 렌더링할 수 있습니다.
+키는 GDS의 `레이어/datatype` 쌍이며 이름이나 프로그래밍 데이터형이 아닙니다. 다른 GDS 쌍을 선택할 목적이 아니라면 키를 바꾸지 마세요. GDS에 없는 쌍은 오류로 처리합니다. 높이는 GDS 사용자 단위를 사용하며 JSON에 적힌 쌍만 내보냅니다. 출력된 STL 파일은 [Blender](https://www.blender.org/) 등에서 열어 보고 렌더링할 수 있습니다.
 
 ## 참고
 

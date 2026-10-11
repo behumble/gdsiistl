@@ -1,0 +1,5 @@
+{
+  "1/0": {"zmin": 0, "zmax": 550, "name": "substrate"},
+  "3/0": {"zmin": 552, "zmax": 592, "name": "soi"},
+  "6/0": {"zmin": 592, "zmax": 593, "name": "metal"}
+}
